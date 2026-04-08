@@ -6,7 +6,7 @@ from urllib import request
 
 
 DEFAULT_KIMI_BASE_URL = "https://api.moonshot.cn/v1"
-DEFAULT_KIMI_MODEL = "kimi-k2.5"
+DEFAULT_KIMI_MODEL = "moonshot-v1-8k"
 
 
 SYSTEM_PROMPT = (
@@ -56,6 +56,14 @@ def polish_markdown_with_kimi(
     try:
         with request.urlopen(req, timeout=timeout_seconds) as resp:
             raw = resp.read().decode("utf-8")
+    except request.HTTPError as exc:
+        err_body = exc.read().decode("utf-8")
+        try:
+            err_data = json.loads(err_body)
+            err_msg = err_data.get("error", {}).get("message", err_body)
+        except Exception:
+            err_msg = err_body
+        raise KimiAPIError(f"调用 Kimi API 失败 ({exc.code}): {err_msg}") from exc
     except Exception as exc:  # pragma: no cover - network exception path
         raise KimiAPIError(f"调用 Kimi API 失败: {exc}") from exc
 

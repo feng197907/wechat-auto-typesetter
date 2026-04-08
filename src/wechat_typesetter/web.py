@@ -82,7 +82,7 @@ PAGE_HTML = """<!doctype html>
       color: var(--muted);
       margin: 0 0 6px;
     }
-    input, select {
+    input, select, textarea {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -91,8 +91,9 @@ PAGE_HTML = """<!doctype html>
       color: var(--ink);
       background: #fff;
       outline: none;
+      font-family: inherit;
     }
-    input:focus, select:focus {
+    input:focus, select:focus, textarea:focus {
       border-color: var(--brand);
       box-shadow: 0 0 0 3px rgba(194, 65, 12, 0.14);
     }
@@ -220,10 +221,43 @@ PAGE_HTML = """<!doctype html>
       color: #fff;
       background: linear-gradient(90deg, var(--brand-2) 0%, #14b8a6 100%);
     }
+    /* Loading Overlay */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(255,255,255,0.8);
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+      backdrop-filter: blur(2px);
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid var(--line);
+      border-top: 4px solid var(--brand-2);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 16px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .loading-text {
+      font-size: 16px;
+      font-weight: bold;
+      color: var(--brand-2);
+    }
     .hint {
       margin-top: 16px;
       border: 1px solid var(--line);
-      border-radius: 16px;
+      border-radius: 6px;
       background: #fff;
       overflow: hidden;
     }
@@ -289,9 +323,29 @@ PAGE_HTML = """<!doctype html>
         window.URL.revokeObjectURL(url);
       }, 100);
     }
+
+    function showLoading() {
+      const isPolish = document.querySelector('input[name="polish"]').checked;
+      const overlay = document.getElementById('loading-overlay');
+      const text = document.getElementById('loading-text');
+      
+      if (isPolish) {
+        text.innerText = "🚀 AI 正在润色并排版中，请稍候...";
+      } else {
+        text.innerText = "⚡ 正在排版中...";
+      }
+      
+      overlay.style.display = 'flex';
+      return true;
+    }
   </script>
 </head>
 <body>
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="spinner"></div>
+    <div id="loading-text" class="loading-text">正在处理中...</div>
+  </div>
+
   {% if ok and message %}
   <div id="success-modal" class="modal-overlay">
     <div class="modal-content">
@@ -314,7 +368,7 @@ PAGE_HTML = """<!doctype html>
       <p class="sub">在页面里快速完成: 单文件排版 / 批量目录排版。</p>
     </section>
 
-    <form method="post" action="/run" enctype="multipart/form-data">
+    <form method="post" action="/run" enctype="multipart/form-data" onsubmit="return showLoading()">
       <input type="hidden" name="config_path" value="{{ values.config_path }}" />
       <input type="hidden" name="input_path" value="{{ values.input_path }}" />
       <input type="hidden" name="output_path" value="{{ values.output_path }}" />
@@ -350,9 +404,10 @@ PAGE_HTML = """<!doctype html>
       </div>
 
       <div class="full">
-        <label>摘要（可选）</label>
-        <input name="summary" value="{{ values.summary }}" placeholder="留空自动提取" />
+        <label>引言 / 摘要（可选，填写后将覆盖正文引言）</label>
+        <textarea name="summary" rows="3" placeholder="留空自动提取">{{ values.summary }}</textarea>
       </div>
+
       <div class="full">
         <label>封面图 URL（可选）</label>
         <input name="cover_image_url" value="{{ values.cover_image_url }}" placeholder="留空自动提取首图" />
@@ -414,7 +469,7 @@ def _load_config(config_path: str) -> dict[str, str]:
 def _initial_values() -> dict[str, Any]:
     return {
         "mode": "single",
-        "config_path": "pipeline.local.json",
+        "config_path": "examples/pipeline.config.json",
         "input_path": "examples/article.md",
         "output_path": "output.html",
         "in_dir": "batch_input",
@@ -470,9 +525,11 @@ def _run_single(values: dict[str, Any], config: dict[str, str], markdown_text: s
         )
 
     custom_css = config.get("custom_css", "")
-    author = str(values.get("author", "")).strip() or config.get("author", "")
-    summary = str(values.get("summary", "")).strip() or config.get("summary", "")
-    cover_image_url = str(values.get("cover_image_url", "")).strip() or config.get("cover_image_url", "")
+    
+    # Pass manual values if provided, otherwise let formatter handle extraction and fallbacks
+    author = str(values.get("author", "")).strip()
+    summary = str(values.get("summary", "")).strip()
+    cover_image_url = str(values.get("cover_image_url", "")).strip()
     title = str(values.get("title", "")).strip()
 
     formatter = WechatFormatter(
@@ -482,9 +539,21 @@ def _run_single(values: dict[str, Any], config: dict[str, str], markdown_text: s
             author=author,
             summary=summary,
             cover_image_url=cover_image_url,
+            # Fallbacks from config
+            default_author=config.get("author", ""),
+            default_summary=config.get("summary", ""),
+            default_cover_image_url=config.get("cover_image_url", ""),
         )
     )
+    
+    # Format and let it extract missing info
     html = formatter.format_markdown(markdown_text)
+    
+    # Update values with what was actually used (for UI feedback)
+    values["title"] = formatter.options.title
+    values["author"] = formatter.options.author
+    values["cover_image_url"] = formatter.options.cover_image_url
+
     WechatFormatter.save_text(output_path, html)
     return "排版成功！", html
 
@@ -501,7 +570,6 @@ def _run_batch(values: dict[str, Any], config: dict[str, str]) -> tuple[str, str
         return "排版成功：未找到需要处理的 .md 文件", ""
 
     custom_css = config.get("custom_css", "")
-    summary = str(values.get("summary", "")).strip() or config.get("summary", "")
     cover_image_url = str(values.get("cover_image_url", "")).strip() or config.get("cover_image_url", "")
     title_template = str(values.get("title_template", "")).strip()
     author_template = str(values.get("author_template", "")).strip()
@@ -533,7 +601,7 @@ def _run_batch(values: dict[str, Any], config: dict[str, str]) -> tuple[str, str
             title=title,
             custom_css=custom_css,
             author=author,
-            summary=summary,
+            summary=str(values.get("summary", "")).strip(),
             cover_image_url=cover_image_url,
         )
 
@@ -578,7 +646,8 @@ def create_app() -> Flask:
             markdown_text = uploaded_file.read().decode("utf-8")
             # Only set title from filename if the user didn't provide one
             if not values.get("title"):
-                values["title"] = Path(uploaded_file.filename).stem
+                values["title"] = "" # Clear default to trigger extraction from content
+
 
         try:
             config = _load_config(str(values.get("config_path", "")))

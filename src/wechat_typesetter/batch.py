@@ -14,21 +14,34 @@ from .kimi import (
 
 
 def _load_config(config_path: str | None) -> dict[str, str]:
-    if not config_path:
-        return {}
-    path = Path(config_path)
-    if not path.exists():
-        raise FileNotFoundError(f"配置文件不存在: {config_path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        "custom_css": str(data.get("custom_css", "")),
-        "author": str(data.get("author", "")),
-        "summary": str(data.get("summary", "")),
-        "cover_image_url": str(data.get("cover_image_url", "")),
-        "kimi_api_key": str(data.get("kimi_api_key", "")),
-        "kimi_model": str(data.get("kimi_model", "")),
-        "kimi_base_url": str(data.get("kimi_base_url", "")),
-    }
+    def _pick_fields(raw: dict[str, object]) -> dict[str, str]:
+        return {
+            "custom_css": str(raw.get("custom_css", "")),
+            "author": str(raw.get("author", "")),
+            "summary": str(raw.get("summary", "")),
+            "cover_image_url": str(raw.get("cover_image_url", "")),
+            "kimi_api_key": str(raw.get("kimi_api_key", "")),
+            "kimi_model": str(raw.get("kimi_model", "")),
+            "kimi_base_url": str(raw.get("kimi_base_url", "")),
+        }
+
+    merged: dict[str, str] = {}
+
+    if config_path:
+        path = Path(config_path)
+        if not path.exists():
+            raise FileNotFoundError(f"配置文件不存在: {config_path}")
+        merged.update(_pick_fields(json.loads(path.read_text(encoding="utf-8"))))
+
+    # 自动加载本地私有配置，覆盖公共配置中的同名字段（便于保存私钥）。
+    local_path = Path("pipeline.local.json")
+    if local_path.exists():
+        local_cfg = _pick_fields(json.loads(local_path.read_text(encoding="utf-8")))
+        for key, value in local_cfg.items():
+            if value.strip():
+                merged[key] = value
+
+    return merged
 
 
 def process_file(

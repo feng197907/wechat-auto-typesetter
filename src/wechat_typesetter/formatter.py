@@ -145,6 +145,58 @@ body {
 }
 """.strip()
 
+THEMES = {
+    "default": DEFAULT_CSS,
+    "minimal": """
+:root {
+  --bg: #ffffff;
+  --card: #ffffff;
+  --text: #333333;
+  --muted: #666666;
+  --line: #eeeeee;
+  --brand: #222222;
+}
+body { background: var(--bg); color: var(--text); font-family: serif; }
+.wechat-article { max-width: 700px; margin: 0 auto; padding: 40px 20px; box-shadow: none; }
+.wechat-article h1 { font-size: 28px; text-align: center; border: none; }
+.wechat-article h2 { font-size: 22px; border-left: 3px solid var(--brand); padding-left: 12px; }
+.wechat-article p { font-size: 15px; line-height: 1.8; text-align: justify; }
+.wechat-article blockquote { background: #f9f9f9; border: none; font-style: italic; border-left: 2px solid #ccc; }
+    """.strip(),
+    "elegant": """
+:root {
+  --bg: #fdf6e3;
+  --card: #fdf6e3;
+  --text: #586e75;
+  --muted: #93a1a1;
+  --line: #eee8d5;
+  --brand: #b58900;
+}
+body { background: var(--bg); color: var(--text); }
+.wechat-article { max-width: 740px; margin: 0 auto; padding: 30px; box-shadow: none; border: 1px solid var(--line); }
+.wechat-article h1 { font-size: 32px; color: var(--brand); text-shadow: 1px 1px 1px rgba(0,0,0,0.05); }
+.wechat-article h2 { font-size: 24px; color: #cb4b16; border-bottom: 1px dashed var(--brand); }
+.wechat-article p { font-size: 17px; letter-spacing: 0.05em; }
+.wechat-article blockquote { background: rgba(181, 137, 0, 0.05); border-color: var(--brand); }
+    """.strip(),
+    "dark": """
+:root {
+  --bg: #1a1a1a;
+  --card: #2d2d2d;
+  --text: #e0e0e0;
+  --muted: #a0a0a0;
+  --line: #404040;
+  --brand: #3b82f6;
+}
+body { background: var(--bg); color: var(--text); }
+.wechat-article { max-width: 760px; margin: 20px auto; background: var(--card); padding: 30px; border-radius: 12px; }
+.wechat-article h1 { color: #fff; border-bottom-color: var(--brand); }
+.wechat-article h2 { color: var(--brand); }
+.wechat-article code { background: #404040; color: #ff79c6; }
+.wechat-article blockquote { background: #363636; border-color: var(--brand); }
+    """.strip()
+}
+
 
 @dataclass(slots=True)
 class FormatOptions:
@@ -159,6 +211,7 @@ class FormatOptions:
     default_author: str = ""
     default_summary: str = ""
     default_cover_image_url: str = ""
+    theme: str = "default"
 
 
 class WechatFormatter:
@@ -168,12 +221,14 @@ class WechatFormatter:
         self.options = options or FormatOptions()
 
     def format_markdown(self, markdown_text: str) -> str:
+        markdown_text = self._normalize_list_blocks(markdown_text)
         body_html = markdown.markdown(
             markdown_text,
             extensions=["extra", "tables", "fenced_code", "sane_lists"],
         )
 
         soup = BeautifulSoup(body_html, "html.parser")
+        self._convert_inline_dash_list_paragraphs(soup)
 
         # Ensure external links open a new tab in web preview.
         for link in soup.find_all("a"):
@@ -234,8 +289,8 @@ class WechatFormatter:
 
         html_body = str(soup)
         
-        # Merge CSS: DEFAULT_CSS as base, custom_css as overrides
-        base_css = DEFAULT_CSS
+        # Merge CSS: Selected theme as base, custom_css as overrides
+        base_css = THEMES.get(self.options.theme, DEFAULT_CSS)
         custom = self.options.custom_css.strip()
         css = f"{base_css}\n{custom}" if custom else base_css
         
@@ -259,6 +314,33 @@ class WechatFormatter:
 </html>
 """
 
+    def _normalize_list_blocks(self, markdown_text: str) -> str:
+        """Ensure list markers are parsed as lists even when users omit a blank line."""
+        lines = markdown_text.splitlines()
+        if not lines:
+            return markdown_text
+
+        normalized: list[str] = []
+        list_marker = re.compile(r"^\s{0,3}(?:[-*+]\s+|\d+[.)]\s+)")
+
+        for line in lines:
+            if list_marker.match(line):
+                prev_non_empty = ""
+                for prev in reversed(normalized):
+                    if prev.strip():
+                        prev_non_empty = prev
+                        break
+
+                if prev_non_empty and not list_marker.match(prev_non_empty):
+                    prev_stripped = prev_non_empty.strip()
+                    if not prev_stripped.startswith(("#", ">", "|", "```", "~~~")):
+                        if normalized and normalized[-1].strip():
+                            normalized.append("")
+
+            normalized.append(line)
+
+        return "\n".join(normalized)
+
     def _build_meta_html(self, cover_url: str, author: str, summary: str) -> str:
         blocks: list[str] = []
         if cover_url:
@@ -266,14 +348,40 @@ class WechatFormatter:
                 f'<div class="wechat-cover"><img src="{html.escape(cover_url)}" alt="cover" /></div>'
             )
 
-        info_lines: list[str] = []
+        # Author as plain paragraph (no special style)
         if author:
-            info_lines.append(f'<p class="wechat-meta-author">作者：{html.escape(author)}</p>')
-        
-        if info_lines:
-            blocks.append('<section class="wechat-meta">' + "".join(info_lines) + "</section>")
+            blocks.append(f'<p>作者：{html.escape(author)}</p>')
 
         return "".join(blocks)
+
+    def _convert_inline_dash_list_paragraphs(self, soup: BeautifulSoup) -> None:
+        """Convert patterns like '说明： - 项1 - 项2' into a real unordered list."""
+        for paragraph in list(soup.find_all("p")):
+            text = paragraph.get_text(" ", strip=True)
+            if text.count(" - ") < 2:
+                continue
+
+            parts = [part.strip() for part in text.split(" - ") if part.strip()]
+            if len(parts) < 3:
+                continue
+
+            intro_text = parts[0]
+            item_texts = parts[1:]
+            if not intro_text.endswith(("：", ":")):
+                continue
+
+            intro_tag = soup.new_tag("p")
+            intro_tag.string = intro_text
+
+            list_tag = soup.new_tag("ul")
+            for item_text in item_texts:
+                item_tag = soup.new_tag("li")
+                item_tag.string = item_text
+                list_tag.append(item_tag)
+
+            paragraph.insert_before(intro_tag)
+            intro_tag.insert_after(list_tag)
+            paragraph.decompose()
 
     def _extract_cover_url(self, soup: BeautifulSoup) -> str:
         first_img = soup.find("img")
@@ -322,13 +430,12 @@ class WechatFormatter:
         return ""
 
     def _remove_title_header(self, soup: BeautifulSoup, title: str) -> None:
-        if not title:
-            return
-        # Usually the title in MD is # Title which becomes <h1>Title</h1>
-        for h1 in soup.find_all("h1"):
-            if h1.get_text(strip=True) == title.strip():
-                h1.decompose()
-                return
+        # Since we always render <h1>{title}</h1> at the very top of the article,
+        # we should remove the first <h1> found in the Markdown body to avoid duplication,
+        # especially when the user manually provides a different title.
+        first_h1 = soup.find("h1")
+        if first_h1:
+            first_h1.decompose()
 
     def _replace_introduction(self, soup: BeautifulSoup, summary: str) -> None:
         # 1. Try to find a header that looks like "Introduction" or "引言"

@@ -53,3 +53,16 @@ def test_manual_meta_overrides_auto_extract() -> None:
     assert "摘要：手动摘要" in output
     assert 'src="https://example.com/manual-cover.png"' in output
     assert "作者：自动作者" not in output
+
+
+def test_inline_dash_sequence_converts_to_list() -> None:
+    formatter = WechatFormatter(FormatOptions(title="列表修复"))
+    md = "我开始盘点自己的核心能力： - 业务能力（产品思维、用户洞察） - 通用能力（项目管理、跨部门沟通） - 迁移能力（能不能复用到其他行业？）"
+
+    output = formatter.format_markdown(md)
+
+    assert "<p>我开始盘点自己的核心能力：</p>" in output
+    assert "<ul>" in output
+    assert "<li>业务能力（产品思维、用户洞察）</li>" in output
+    assert "<li>通用能力（项目管理、跨部门沟通）</li>" in output
+    assert "<li>迁移能力（能不能复用到其他行业？）</li>" in output

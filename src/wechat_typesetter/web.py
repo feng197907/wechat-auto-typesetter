@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
+from datetime import datetime
 from typing import Any
+from urllib import request as urllib_request
 
-from flask import Flask, request, render_template_string, send_file
+from flask import Flask, request, render_template_string, send_file, jsonify
 import io
 
 from .formatter import FormatOptions, WechatFormatter
@@ -21,6 +24,9 @@ PAGE_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>微信文章排版控制台</title>
   <style>
     :root {
@@ -47,12 +53,56 @@ PAGE_HTML = """<!doctype html>
       padding: 0 16px;
     }
     .hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
       border: 1px solid var(--line);
       border-radius: 18px;
       padding: 18px 20px;
       background: linear-gradient(110deg, #fff7ed 0%, #ecfeff 100%);
       box-shadow: 0 10px 26px rgba(17, 24, 39, 0.08);
       margin-bottom: 16px;
+    }
+    .hero-left {
+      min-width: 0;
+    }
+    .hero-actions {
+      flex-shrink: 0;
+      display: flex;
+      align-items: stretch;
+      justify-content: flex-end;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 280px;
+    }
+    .hotspot-btn {
+      min-width: 260px;
+      padding: 12px 16px;
+      font-weight: bold;
+      background: linear-gradient(90deg, #0f766e 0%, #0ea5e9 100%);
+      box-shadow: 0 8px 20px rgba(14, 116, 144, 0.3);
+    }
+    .kw-wrap { display: flex; gap: 8px; align-items: center; }
+    .kw-input { flex: 1; min-width: 240px; }
+    .kw-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .kw-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 8px;
+      border-radius: 14px;
+      background: #eef2ff;
+      color: #374151;
+      border: 1px solid var(--line);
+      font-size: 12px;
+    }
+    .kw-chip button {
+      margin-left: 6px;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      color: #6b7280;
+      font-size: 14px;
     }
     h1 {
       margin: 0;
@@ -286,6 +336,18 @@ PAGE_HTML = """<!doctype html>
       font-size: 12px;
     }
     @media (max-width: 900px) {
+      .hero {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .hero-actions {
+        min-width: 0;
+        justify-content: stretch;
+      }
+      .hotspot-btn {
+        width: 100%;
+        min-width: 0;
+      }
       form { grid-template-columns: 1fr; }
       .btns { justify-content: flex-start; }
       iframe { height: 420px; }
@@ -338,6 +400,62 @@ PAGE_HTML = """<!doctype html>
       overlay.style.display = 'flex';
       return true;
     }
+
+    function openHotspotsReport() {
+      const qs = (window.hotspotKeywords && window.hotspotKeywords.length)
+        ? ('?keywords=' + encodeURIComponent(window.hotspotKeywords.join(',')))
+        : '';
+      window.open('/hotspots/report' + qs, '_blank');
+    }
+
+    // 提交任务后，自动将 URL 重置为根路径，防止手动刷新时弹出“确认表单重新提交”或停留在 /run
+    if (window.location.pathname === '/run') {
+      window.history.replaceState({}, '', '/');
+    }
+
+    window.hotspotKeywords = [];
+    function renderKeywords() {
+      const list = document.getElementById('hotspot-keywords-list');
+      if (!list) return;
+      list.innerHTML = '';
+      window.hotspotKeywords.forEach((kw, idx) => {
+        const chip = document.createElement('span');
+        chip.className = 'kw-chip';
+        const txt = document.createElement('span');
+        txt.textContent = kw;
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.textContent = '×';
+        rm.onclick = function() {
+          window.hotspotKeywords.splice(idx, 1);
+          renderKeywords();
+        };
+        chip.appendChild(txt);
+        chip.appendChild(rm);
+        list.appendChild(chip);
+      });
+    }
+    function addKeywordsFromInput() {
+      const input = document.getElementById('hotspot-keywords');
+      if (!input) return;
+      const parts = String(input.value || '').split(/[\\s,，、;；]+/).map(s => s.trim()).filter(Boolean);
+      parts.forEach(p => {
+        if (!window.hotspotKeywords.includes(p)) window.hotspotKeywords.push(p);
+      });
+      input.value = '';
+      renderKeywords();
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+      const input = document.getElementById('hotspot-keywords');
+      if (input) {
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            addKeywordsFromInput();
+          }
+        });
+      }
+    });
   </script>
 </head>
 <body>
@@ -364,8 +482,18 @@ PAGE_HTML = """<!doctype html>
 
   <div class="wrap">
     <section class="hero">
-      <h1>微信公众号排版控制台</h1>
-      <p class="sub">在页面里快速完成: 单文件排版 / 批量目录排版。</p>
+      <div class="hero-left">
+        <h1>微信公众号排版控制台</h1>
+        <p class="sub">在页面里快速完成: 单文件排版 / 批量目录排版。</p>
+      </div>
+      <div class="hero-actions">
+        <div class="kw-wrap">
+          <input id="hotspot-keywords" class="kw-input" placeholder="输入关键词，回车/逗号添加，可添加多个" />
+          <button class="btn-sm" type="button" onclick="addKeywordsFromInput()">添加</button>
+        </div>
+        <div id="hotspot-keywords-list" class="kw-list"></div>
+        <button class="hotspot-btn" type="button" onclick="openHotspotsReport()">抓取当前热点内容</button>
+      </div>
     </section>
 
     <form method="post" action="/run" enctype="multipart/form-data" onsubmit="return showLoading()">
@@ -380,6 +508,16 @@ PAGE_HTML = """<!doctype html>
         <select name="mode" onchange="this.form.submit()">
           <option value="single" {% if values.mode == 'single' %}selected{% endif %}>单文件 (上传 MD)</option>
           <option value="batch" {% if values.mode == 'batch' %}selected{% endif %}>批处理目录 (服务器本地)</option>
+        </select>
+      </div>
+
+      <div class="full">
+        <label>模板样式选择</label>
+        <select name="theme">
+          <option value="default" {% if values.theme == 'default' %}selected{% endif %}>默认 (商务科技)</option>
+          <option value="minimal" {% if values.theme == 'minimal' %}selected{% endif %}>极简 (文艺清新)</option>
+          <option value="elegant" {% if values.theme == 'elegant' %}selected{% endif %}>优雅 (经典阅读)</option>
+          <option value="dark" {% if values.theme == 'dark' %}selected{% endif %}>暗黑 (极客范)</option>
         </select>
       </div>
 
@@ -446,29 +584,124 @@ PAGE_HTML = """<!doctype html>
 """
 
 
-def _load_config(config_path: str) -> dict[str, str]:
-    if not config_path.strip():
-        return {}
+HOTSPOT_REPORT_HTML = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>当日热点分析报告</title>
+  <style>
+    :root {
+      --bg: radial-gradient(circle at 10% 10%, #fef3c7 0%, #ecfeff 40%, #eff6ff 100%);
+      --panel: #ffffff;
+      --line: #d1d5db;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --brand: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 24px auto;
+      padding: 0 14px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      box-shadow: 0 10px 26px rgba(17, 24, 39, 0.08);
+      overflow: hidden;
+    }
+    .head {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(110deg, #f0fdfa 0%, #eff6ff 100%);
+    }
+    .title {
+      margin: 0;
+      font-size: 24px;
+      color: #115e59;
+    }
+    .meta {
+      margin: 8px 0 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    pre {
+      margin: 0;
+      padding: 18px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.75;
+      font-size: 15px;
+    }
+    .err {
+      color: #9f1239;
+      background: #fff1f2;
+      border-top: 1px solid #fecdd3;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="panel">
+      <header class="head">
+        <h1 class="title">当日热点分析报告</h1>
+        <p class="meta">生成时间: {{ generated_at }}</p>
+      </header>
+      {% if ok %}
+      <pre>{{ report }}</pre>
+      {% else %}
+      <pre class="err">{{ report }}</pre>
+      {% endif %}
+    </section>
+  </div>
+</body>
+</html>
+"""
 
+
+def _load_config(config_path: str) -> dict[str, str]:
+  def _pick_fields(raw: dict[str, object]) -> dict[str, str]:
+    return {
+      "custom_css": str(raw.get("custom_css", "")),
+      "author": str(raw.get("author", "")),
+      "summary": str(raw.get("summary", "")),
+      "cover_image_url": str(raw.get("cover_image_url", "")),
+      "kimi_api_key": str(raw.get("kimi_api_key", "")),
+      "kimi_model": str(raw.get("kimi_model", "")),
+      "kimi_base_url": str(raw.get("kimi_base_url", "")),
+    }
+
+  merged: dict[str, str] = {}
+
+  if config_path.strip():
     path = Path(config_path)
     if not path.exists():
-        raise FileNotFoundError(f"配置文件不存在: {config_path}")
+      raise FileNotFoundError(f"配置文件不存在: {config_path}")
+    merged.update(_pick_fields(json.loads(path.read_text(encoding="utf-8"))))
 
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        "custom_css": str(data.get("custom_css", "")),
-        "author": str(data.get("author", "")),
-        "summary": str(data.get("summary", "")),
-        "cover_image_url": str(data.get("cover_image_url", "")),
-        "kimi_api_key": str(data.get("kimi_api_key", "")),
-        "kimi_model": str(data.get("kimi_model", "")),
-        "kimi_base_url": str(data.get("kimi_base_url", "")),
-    }
+  # 自动加载本地私有配置，覆盖公共配置中的同名字段（便于保存私钥）。
+  local_path = Path("pipeline.local.json")
+  if local_path.exists():
+    local_cfg = _pick_fields(json.loads(local_path.read_text(encoding="utf-8")))
+    for key, value in local_cfg.items():
+      if value.strip():
+        merged[key] = value
+
+  return merged
 
 
 def _initial_values() -> dict[str, Any]:
     return {
         "mode": "single",
+        "theme": "default",
         "config_path": "examples/pipeline.config.json",
         "input_path": "examples/article.md",
         "output_path": "output.html",
@@ -539,6 +772,7 @@ def _run_single(values: dict[str, Any], config: dict[str, str], markdown_text: s
             author=author,
             summary=summary,
             cover_image_url=cover_image_url,
+            theme=str(values.get("theme", "default")),
             # Fallbacks from config
             default_author=config.get("author", ""),
             default_summary=config.get("summary", ""),
@@ -603,6 +837,7 @@ def _run_batch(values: dict[str, Any], config: dict[str, str]) -> tuple[str, str
             author=author,
             summary=str(values.get("summary", "")).strip(),
             cover_image_url=cover_image_url,
+            theme=str(values.get("theme", "default")),
         )
 
         html = WechatFormatter(options).format_markdown(markdown_text)
@@ -614,8 +849,173 @@ def _run_batch(values: dict[str, Any], config: dict[str, str]) -> tuple[str, str
     return f"批量排版成功！共处理 {len(outputs)} 个文件", preview_html
 
 
+def _fetch_today_hot_topics(limit: int = 15) -> tuple[list[str], str]:
+    # 尝试百度热搜 (通常比较稳定且易于抓取)
+    try:
+        url = "https://top.baidu.com/board?tab=realtime"
+        req = urllib_request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            },
+        )
+        with urllib_request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8")
+        
+        # 百度热搜词通常嵌在 JSON 数据中
+        words = re.findall(r'"word":"([^"]+)"', html)
+        if words:
+            seen = set()
+            unique_words = []
+            for w in words:
+                w = w.strip()
+                if w and w not in seen:
+                    unique_words.append(w)
+                    seen.add(w)
+            if unique_words:
+                return unique_words[:limit], "百度热搜"
+    except Exception:
+        pass
+
+    # 尝试微博热搜
+    try:
+        url = "https://weibo.com/ajax/side/hotSearch"
+        req = urllib_request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+                "Referer": "https://weibo.com/",
+            },
+        )
+        with urllib_request.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        real_hot = data.get("data", {}).get("realtime", [])
+        words = [item.get("word") for item in real_hot if item.get("word")]
+        if words:
+            return words[:limit], "微博热搜"
+    except Exception:
+        pass
+
+    # 最后尝试知乎热榜 (原逻辑，目前可能因 401 失败)
+    try:
+        url = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=50&desktop=true"
+        req = urllib_request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+                "Referer": "https://www.zhihu.com/hot",
+            },
+        )
+        with urllib_request.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+
+        topics: list[str] = []
+        for item in data.get("data", []):
+            target = item.get("target", {}) if isinstance(item, dict) else {}
+            title = str(target.get("title", "")).strip()
+            if title:
+                topics.append(title)
+
+        if topics:
+            return topics[:limit], "知乎热榜"
+    except Exception:
+        pass
+
+    raise RuntimeError("未抓取到热点数据，所有备选源均不可用，请稍后重试。")
+
+
+def _filter_topics_by_keywords(topics: list[str], keywords: list[str]) -> list[str]:
+    if not keywords:
+        return topics
+    lowered = [k.lower() for k in keywords if k]
+    result: list[str] = []
+    for t in topics:
+        lt = t.lower()
+        if any(k in lt for k in lowered):
+            result.append(t)
+    return result
+
+
+def _analyze_hot_topics(topics: list[str], source: str = "热点源", selected_keywords: list[str] | None = None) -> str:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    text = " ".join(topics)
+    tokens = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", text)
+    stop_words = {
+        "一个", "我们", "他们", "这个", "那个", "什么", "如何", "为什么", "可以", "已经", "还是", "真的", "到底", "中国", "美国", "今天", "当日", "热点",
+    }
+
+    freq: dict[str, int] = {}
+    for token in tokens:
+        if token in stop_words:
+            continue
+        if len(token) <= 1:
+            continue
+        freq[token] = freq.get(token, 0) + 1
+
+    keyword_items = sorted(freq.items(), key=lambda x: (-x[1], -len(x[0]), x[0]))[:8]
+    keyword_line = "、".join(f"{word}({count})" for word, count in keyword_items) if keyword_items else "暂无"
+
+    category_rules: dict[str, list[str]] = {
+        "科技/AI": ["AI", "人工智能", "大模型", "芯片", "机器人", "算力", "算法", "软件", "互联网"],
+        "财经/产业": ["经济", "市场", "股", "公司", "融资", "创业", "汽车", "就业", "产业"],
+        "社会/民生": ["教育", "医疗", "高考", "学校", "家庭", "孩子", "住房", "城市", "老人"],
+        "文娱/体育": ["电影", "演员", "综艺", "音乐", "比赛", "球队", "冠军", "奥运", "演唱会"],
+    }
+    category_count: dict[str, int] = {k: 0 for k in category_rules}
+    for topic in topics:
+        for category, keys in category_rules.items():
+            if any(key in topic for key in keys):
+                category_count[category] += 1
+
+    ranked_categories = [
+        f"{name}:{count}"
+        for name, count in sorted(category_count.items(), key=lambda x: (-x[1], x[0]))
+        if count > 0
+    ]
+    category_line = "；".join(ranked_categories[:3]) if ranked_categories else "分布不明显"
+
+    kw_line = ""
+    if selected_keywords:
+        kw_line = "、".join(selected_keywords)
+    lines = [
+        f"热点报告时间: {now}",
+        f"数据源: {source}",
+        f"关键词筛选: {kw_line}" if kw_line else "",
+        "",
+        "一、今日热点 Top 10",
+    ]
+    for idx, topic in enumerate(topics[:10], 1):
+        lines.append(f"{idx}. {topic}")
+
+    lines.extend(
+        [
+            "",
+            "二、关键词聚焦",
+            keyword_line,
+            "",
+            "三、话题结构",
+            category_line,
+            "",
+            "四、内容建议",
+            "1. 选 Top 3 热点中的一个争议点，做“观点+证据”短评。",
+            "2. 结合你账号定位，把热点改写成“对读者有什么影响”的实用解读。",
+            "3. 复盘关键词趋势，连续 3 天跟踪同一主题，做系列内容。",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
+
+    @app.after_request
+    def add_no_cache(response):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     @app.get("/")
     def index() -> str:
@@ -684,6 +1084,41 @@ def create_app() -> Flask:
             as_attachment=True,
             download_name=filename,
             mimetype="text/html"
+        )
+
+    @app.post("/hotspots")
+    def hotspots() -> Any:
+        try:
+            topics, source = _fetch_today_hot_topics(limit=15)
+            report = _analyze_hot_topics(topics, source=source)
+            return jsonify(
+                {
+                    "ok": True,
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "report": report,
+                    "topics": topics,
+                    "source": source,
+                }
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "message": f"抓取热点失败: {exc}"}), 500
+
+    @app.get("/hotspots/report")
+    def hotspots_report_page() -> str:
+        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            topics, source = _fetch_today_hot_topics(limit=15)
+            report = _analyze_hot_topics(topics, source=source)
+            ok = True
+        except Exception as exc:
+            report = f"抓取热点失败: {exc}"
+            ok = False
+
+        return render_template_string(
+            HOTSPOT_REPORT_HTML,
+            generated_at=generated_at,
+            report=report,
+            ok=ok,
         )
 
     return app

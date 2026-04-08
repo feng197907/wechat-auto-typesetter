@@ -1,0 +1,30 @@
+# Local secret config
+pipeline.local.json
+examples/pipeline.local.json
+
+# Python cache
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+.trae/
+
+# Build and Dist
+build/
+dist/
+*.egg-info/
+
+# Output files
+output.html
+batch_output/
+*.log

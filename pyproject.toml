@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wechat-auto-typesetter"
+version = "0.1.0"
+description = "Auto typesetting tool for WeChat Official Account articles"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "markdown>=3.6",
+    "beautifulsoup4>=4.12.3",
+    "flask>=3.0.0",
+]
+
+[project.scripts]
+wechat-typesetter = "wechat_typesetter.cli:main"
+wechat-typesetter-batch = "wechat_typesetter.batch:main"
+wechat-typesetter-web = "wechat_typesetter.web:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

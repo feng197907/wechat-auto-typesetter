@@ -1,0 +1,9 @@
+{
+  "custom_css": ".wechat-article{max-width:720px;margin:20px auto;padding:24px;background:#fffdf8;color:#2f2a24;font-family:'Microsoft YaHei',sans-serif;} .wechat-article h1{border-bottom:2px solid #f59e0b;color:#92400e;} .wechat-article h2{color:#b45309;}",
+  "author": "默认作者",
+  "summary": "",
+  "cover_image_url": "",
+  "kimi_api_key": "YOUR_KIMI_API_KEY",
+  "kimi_model": "kimi-k2.5",
+  "kimi_base_url": "https://api.moonshot.cn/v1"
+}

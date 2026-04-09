@@ -674,6 +674,57 @@ HOTSPOT_REPORT_HTML = """<!doctype html>
     .report-content a:hover {
       text-decoration: underline !important;
     }
+    /* Suggestion Card Styles */
+    .suggestion-list {
+      padding: 0;
+      margin: 0;
+      list-style: none;
+    }
+    .suggestion-item {
+      display: flex;
+      align-items: flex-start;
+      padding: 16px;
+      margin-bottom: 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      background: #f8fafc;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+    .suggestion-item:hover {
+      border-color: var(--brand);
+      background: #f0fdfa;
+      box-shadow: 0 4px 12px rgba(15, 118, 110, 0.08);
+    }
+    .suggestion-item.selected {
+      border-color: var(--brand);
+      background: #f0fdfa;
+    }
+    .suggestion-cb {
+      width: 18px;
+      height: 18px;
+      margin-top: 3px;
+      margin-right: 14px;
+      cursor: pointer;
+      accent-color: var(--brand);
+    }
+    .suggestion-text {
+      flex: 1;
+      font-size: 15px;
+      color: var(--ink);
+    }
+    .suggestion-title {
+      display: block;
+      font-weight: 800;
+      color: #115e59;
+      margin-bottom: 6px;
+      font-size: 17px;
+      line-height: 1.4;
+    }
+    .suggestion-desc {
+      color: var(--muted);
+      line-height: 1.6;
+    }
     .err {
       color: #9f1239;
       background: #fff1f2;
@@ -736,6 +787,82 @@ HOTSPOT_REPORT_HTML = """<!doctype html>
   </div>
 
   <script>
+    function toggleSuggestion(el) {
+      const cb = el.querySelector('.suggestion-cb');
+      cb.checked = !cb.checked;
+      updateSelection(cb);
+    }
+
+    function updateSelection(cb) {
+      const item = cb.closest('.suggestion-item');
+      if (cb.checked) {
+        item.classList.add('selected');
+      } else {
+        item.classList.remove('selected');
+      }
+      
+      // 更新全选框状态
+      const allCbs = document.querySelectorAll('.suggestion-cb');
+      const allChecked = Array.from(allCbs).every(c => c.checked);
+      const selectAllCb = document.getElementById('select-all-cb');
+      if (selectAllCb) {
+        selectAllCb.checked = allChecked;
+      }
+    }
+
+    function toggleAllSuggestions(selectAllCb) {
+      const isChecked = selectAllCb.checked;
+      const allCbs = document.querySelectorAll('.suggestion-cb');
+      allCbs.forEach(cb => {
+        cb.checked = isChecked;
+        updateSelection(cb);
+      });
+    }
+
+    async function generateArticles() {
+      const cbs = document.querySelectorAll('.suggestion-cb:checked');
+      if (cbs.length === 0) {
+        alert('请至少勾选一个选题！');
+        return;
+      }
+      
+      const topics = Array.from(cbs).map(cb => cb.value);
+      const btn = document.getElementById('gen-btn');
+      const status = document.getElementById('gen-status');
+      
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+      btn.style.cursor = 'not-allowed';
+      status.style.display = 'block';
+      status.textContent = '🚀 正在为您创作文章，请稍候（每篇约 10-20 秒）...';
+      
+      try {
+        const response = await fetch('/generate_articles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topics })
+        });
+        
+        const data = await response.json();
+        if (data.ok) {
+          status.innerHTML = '✅ 生成成功！文章已存放到：<br/><code style="background: #f1f5f9; padding: 2px 5px; border-radius: 4px;">' + data.path + '</code>';
+          status.style.color = '#059669';
+        } else {
+          status.textContent = '❌ 生成失败: ' + data.message;
+          status.style.color = '#dc2626';
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+        }
+      } catch (e) {
+        status.textContent = '❌ 网络请求异常: ' + e;
+        status.style.color = '#dc2626';
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.style.cursor = 'pointer';
+      }
+    }
+
     async function fetchReport() {
       const params = new URLSearchParams(window.location.search);
       const source = params.get('source') || '';
@@ -1315,9 +1442,13 @@ def _analyze_hot_topics(
                 "你是一个资深的微信公众号运营专家。请根据提供的热点话题，为用户提供 3-4 条极具实操性的公众号选题和内容创作建议。"
                 "要求：\n"
                 "1) 结合公众号读者的阅读习惯（猎奇、实用、共鸣、情绪价值）；\n"
-                "2) 给出具体的切入角度，而不仅仅是罗列话题；\n"
-                "3) 建议要具体、可落地；\n"
-                "4) 格式为 HTML 的 <ul><li> 列表形式，不要输出多余的解释文字。"
+                "2) 每一条建议必须严格按照以下格式输出：\n"
+                "   <li>[选题标题]：[建议的文章标题]\n"
+                "   切入角度：[具体描述内容]</li>\n"
+                "3) **不要输出“选题标题：”这几个字，直接写具体的标题。选题标题应简短有力，能够作为文件名。**\n"
+                "4) **每一条建议必须放在同一个 <li> 标签内，选题标题与切入角度之间用换行隔开**；\n"
+                "5) 建议要具体、可落地，标题要吸引人；\n"
+                "6) 格式为 HTML 的 <ul><li> 列表形式，不要输出多余的解释文字。"
             )
             
             ai_suggestions = chat_with_kimi(
@@ -1328,23 +1459,84 @@ def _analyze_hot_topics(
                 base_url=base_url,
                 temperature=0.7
             )
-            # 确保返回的是干净的列表
-            if "<ul>" not in ai_suggestions:
-                lines = [line.strip("- *1234. ") for line in ai_suggestions.split("\n") if line.strip()]
-                ai_suggestions = "<ul>" + "".join([f"<li>{l}</li>" for l in lines]) + "</ul>"
+            # 优先提取 <li> 标签内容，支持跨行提取
+            lines = re.findall(r"<li>(.*?)</li>", ai_suggestions, re.DOTALL)
+            if not lines:
+                lines = [line.strip("- *1234. ") for line in ai_suggestions.split("\n") if line.strip() and "<ul>" not in line and "</ul>" not in line]
+            
+            items_html = []
+            for l in lines:
+                l = l.strip()
+                # 尝试按行分割，第一行通常是标题，后续是切入角度
+                parts = [p.strip() for p in l.split("\n") if p.strip()]
+                if not parts:
+                    continue
+                
+                # 第一行作为标题，清理掉 HTML 标签
+                title = re.sub(r'<[^>]+>', '', parts[0]).strip()
+                # 剩余部分作为描述
+                desc = "\n".join(parts[1:]) if len(parts) > 1 else ""
+                desc = re.sub(r'<[^>]+>', '', desc).strip()
+                
+                # 如果没能成功按行分割（AI 没换行），则尝试按冒号分割
+                if not desc and "：" in title or ":" in title:
+                    title_parts = re.split(r'[:：]', title, 1)
+                    title = title_parts[0].strip()
+                    desc = title_parts[1].strip() if len(title_parts) > 1 else ""
+
+                # 最终清理，防止 value 中包含冗余信息
+                full_text = f"{title}\n{desc}".strip()
+                
+                items_html.append(
+                    f"<li class='suggestion-item' onclick='toggleSuggestion(this)'>"
+                    f"<input type='checkbox' class='suggestion-cb' value='{full_text}' onclick='event.stopPropagation(); updateSelection(this)'>"
+                    f"<div class='suggestion-text'>"
+                    f"<span class='suggestion-title'>{title}</span>"
+                    f"<span class='suggestion-desc'>{desc}</span>"
+                    f"</div>"
+                    f"</li>"
+                )
+            # 添加全选框容器
+            select_all_html = (
+                "<div style='margin-bottom: 15px; padding-left: 10px; display: flex; align-items: center; border-bottom: 1px dashed #e2e8f0; padding-bottom: 10px;'>"
+                "<input type='checkbox' id='select-all-cb' onclick='toggleAllSuggestions(this)' style='width: 18px; height: 18px; margin-right: 10px; cursor: pointer; accent-color: var(--brand);'>"
+                "<label for='select-all-cb' style='cursor: pointer; font-weight: bold; color: var(--brand); font-size: 14px;'>全选 / 取消全选</label>"
+                "</div>"
+            )
+            ai_suggestions = select_all_html + "<ul class='suggestion-list'>" + "".join(items_html) + "</ul>"
         except Exception as e:
             ai_suggestions = f"<div style='color: #9f1239; background: #fff1f2; padding: 10px; border-radius: 8px; border: 1px solid #fda4af; font-size: 13px; margin-bottom: 10px;'><strong>AI 分析请求失败:</strong> {e}<br/><small>请检查 API Key 是否正确，或 API 余额是否充足。</small></div>"
     else:
         ai_suggestions = "<div style='color: #6b7280; background: #f9fafb; padding: 10px; border-radius: 8px; border: 1px solid #e5e7eb; font-size: 13px; margin-bottom: 10px;'><strong>提示:</strong> 未检测到 Kimi API Key，正在展示默认建议。输入 API Key 后可获得 AI 深度分析。</div>"
     
     if not ai_suggestions or "提示:" in ai_suggestions:
-        ai_suggestions += (
-            "<ul>"
-            "<li>1. 选 Top 3 热点中的一个争议点，做“观点+证据”短评。</li>"
-            "<li>2. 结合你账号定位，把热点改写成“对读者有什么影响”的实用解读。</li>"
-            "<li>3. 复盘关键词趋势，连续 3 天跟踪同一主题，做系列内容。</li>"
-            "</ul>"
+        default_items = [
+            "1. 选 Top 3 热点中的一个争议点：做“观点+证据”短评。",
+            "2. 实用解读：结合你账号定位，把热点改写成“对读者有什么影响”。",
+            "3. 系列内容：复盘关键词趋势，连续 3 天跟踪同一主题。"
+        ]
+        items_html = []
+        for l in default_items:
+            title_parts = re.split(r'[:：]', l, 1)
+            title = title_parts[0].strip()
+            desc = title_parts[1].strip() if len(title_parts) > 1 else ""
+            items_html.append(
+                f"<li class='suggestion-item' onclick='toggleSuggestion(this)'>"
+                f"<input type='checkbox' class='suggestion-cb' value='{l}' onclick='event.stopPropagation(); updateSelection(this)'>"
+                f"<div class='suggestion-text'>"
+                f"<span class='suggestion-title'>{title}</span>"
+                f"<span class='suggestion-desc'>{desc}</span>"
+                f"</div>"
+                f"</li>"
+            )
+        # 默认建议也添加全选
+        select_all_html = (
+            "<div style='margin-bottom: 15px; padding-left: 10px; display: flex; align-items: center; border-bottom: 1px dashed #e2e8f0; padding-bottom: 10px;'>"
+            "<input type='checkbox' id='select-all-cb' onclick='toggleAllSuggestions(this)' style='width: 18px; height: 18px; margin-right: 10px; cursor: pointer; accent-color: var(--brand);'>"
+            "<label for='select-all-cb' style='cursor: pointer; font-weight: bold; color: var(--brand); font-size: 14px;'>全选 / 取消全选</label>"
+            "</div>"
         )
+        ai_suggestions = (ai_suggestions if ai_suggestions else "") + select_all_html + "<ul class='suggestion-list'>" + "".join(items_html) + "</ul>"
 
     # 构造 HTML 报告
     html_lines = [
@@ -1370,7 +1562,13 @@ def _analyze_hot_topics(
         f"<div>{category_line}</div>",
         "<br/>",
         "<h3>四、内容建议 (AI 分析)</h3>" if api_key.strip() else "<h3>四、内容建议</h3>",
-        ai_suggestions
+        ai_suggestions,
+        "<div style='margin-top: 20px; padding: 20px; border-top: 1px solid var(--line); text-align: center;'>",
+        "<button id='gen-btn' onclick='generateArticles()' style='background: var(--brand); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 16px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: all 0.2s;'>",
+        "🚀 AI 生成选中的公众号文章",
+        "</button>",
+        "<div id='gen-status' style='margin-top: 15px; font-size: 14px; color: var(--brand); font-weight: bold; display: none;'></div>",
+        "</div>"
     ])
     return "".join(html_lines)
 
@@ -1504,6 +1702,94 @@ def create_app() -> Flask:
             )
         except Exception as exc:
             return jsonify({"ok": False, "message": f"抓取热点失败: {exc}"}), 500
+
+    @app.post("/generate_articles")
+    def generate_articles() -> Any:
+        try:
+            body = request.get_json(silent=True) or {}
+            topics = body.get("topics", [])
+            if not topics:
+                return jsonify({"ok": False, "message": "未选中任何话题"}), 400
+
+            # 1. 加载配置和 API Key
+            config = _load_config(str(_initial_values().get("config_path", "")))
+            api_key, model, base_url = _get_kimi_fields(_initial_values(), config)
+            if not api_key:
+                return jsonify({"ok": False, "message": "未配置 Kimi API Key"}), 400
+
+            # 2. 读取 SKILL.md 风格要求
+            skill_path = Path("examples/SKILL.md")
+            skill_content = skill_path.read_text(encoding="utf-8") if skill_path.exists() else ""
+
+            # 3. 创建日期目录
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            out_dir = Path("batch_input") / today_str
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            system_prompt = (
+                "你是一个资深的微信公众号创作者。请根据提供的选题和参考的写作风格要求，创作一篇高质量的公众号文章。\n\n"
+                "### 写作风格要求 (SKILL.md):\n"
+                f"{skill_content}\n\n"
+                "### 核心指令：\n"
+                "1) 严格遵守 SKILL.md 中的所有禁令（如标点禁令、踩雷词禁令）；\n"
+                "2) 保持口语化的节奏和“活人感”；\n"
+                "3) 段落要短，多用逗号，模拟聊天感；\n"
+                "4) 选题要有深度，从现象升维到文化或哲学层面；\n"
+                "5) 输出格式为纯 Markdown，**严禁包含任何“总评”、“修复优先级”、“分析”或“评价”等元数据或总结性内容**；\n"
+                "6) 仅输出文章标题（用 # 标记）和正文内容，不要输出任何 AI 自身的对话或解释性文字。"
+            )
+
+            results = []
+            for topic in topics:
+                # 1. 优先按换行符拆分，第一行通常是标题（包含选题名称和建议标题）
+                lines = [line.strip() for line in topic.split("\n") if line.strip()]
+                if not lines:
+                    continue
+                
+                title_line = lines[0]
+                article_desc = "\n".join(lines[1:]) if len(lines) > 1 else ""
+
+                # 2. 进一步清理标题行，移除 AI 可能输出的“选题名称：”等字样
+                # 兼容多种可能的中文/英文前缀
+                article_title = re.sub(r"^(选题名称|选题标题|选题|Title|Topic)[:：\s]*", "", title_line, flags=re.IGNORECASE).strip()
+                
+                # 3. 清理描述内容，移除 AI 可能输出的“切入角度：”等字样
+                article_desc = re.sub(r"^(切入角度|角度|Angle|Perspective)[:：\s]*", "", article_desc, flags=re.IGNORECASE).strip()
+
+                # 4. 生成安全的文件名
+                # 如果 article_title 仍然包含冒号，只取第一部分作为文件名
+                filename_base = re.split(r'[:：]', article_title, 1)[0].strip()
+                safe_name = re.sub(r'[\\/:*?"<>|]', "_", filename_base)[:100]
+                if not safe_name:
+                    safe_name = "untitled_article"
+                
+                file_path = out_dir / f"{safe_name}.md"
+                
+                # 5. 构造 Prompt，告诉 AI 标题和背景
+                user_prompt = f"请以选题「{article_title}」为题，写一篇公众号文章。"
+                if article_desc:
+                    user_prompt += f"\n背景参考：{article_desc}"
+                user_prompt += "\n记住要像个活人一样思考和表达，遵循上述所有风格指导。"
+
+                content = chat_with_kimi(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    api_key=api_key,
+                    model=model,
+                    base_url=base_url,
+                    temperature=0.8
+                )
+                file_path.write_text(content, encoding="utf-8")
+                results.append(str(file_path))
+
+            return jsonify({
+                "ok": True, 
+                "message": f"成功生成 {len(results)} 篇文章", 
+                "path": str(out_dir),
+                "files": results
+            })
+        except Exception as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 500
 
     @app.get("/hotspots/report")
     def hotspots_report_page() -> str:

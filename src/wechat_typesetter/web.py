@@ -201,7 +201,7 @@ PAGE_HTML = """<!doctype html>
     .status-text { flex: 1; }
     .status-btns { display: flex; gap: 8px; margin-left: 12px; }
     .btn-sm {
-      padding: 4px 10px;
+      padding: 10px 10px;
       font-size: 12px;
       border-radius: 6px;
       box-shadow: none;
@@ -336,6 +336,66 @@ PAGE_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
     }
+    /* Batch File Styles */
+    .file-list {
+      padding: 0;
+      margin: 0;
+      list-style: none !important;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 10px;
+    }
+    .file-item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #ffffff;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      cursor: pointer;
+      position: relative;
+      user-select: none;
+    }
+    .file-item:hover {
+      border-color: var(--brand-2);
+      background: #fdfdfd;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    }
+    .file-item.selected {
+      background: #f0fdfa;
+      border-color: var(--brand-2);
+      box-shadow: inset 0 0 0 1px var(--brand-2);
+    }
+    .file-cb {
+      width: 18px;
+      height: 18px;
+      margin: 0 12px 0 0 !important;
+      cursor: pointer;
+      accent-color: var(--brand-2);
+      flex-shrink: 0;
+    }
+    .file-name {
+      font-size: 14px;
+      font-weight: 500;
+      color: #374151;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.2;
+    }
+    .file-tag {
+      font-size: 10px;
+      padding: 2px 6px;
+      background: #f1f5f9;
+      color: #64748b;
+      border-radius: 4px;
+      margin-left: 8px;
+      border: 1px solid #e2e8f0;
+      flex-shrink: 0;
+    }
     @media (max-width: 900px) {
       .hero {
         flex-direction: column;
@@ -465,6 +525,72 @@ PAGE_HTML = """<!doctype html>
       input.value = '';
       renderKeywords();
     }
+    function updateBatchSelection(cb) {
+      const item = cb.closest('.file-item');
+      if (cb.checked) {
+        item.classList.add('selected');
+      } else {
+        item.classList.remove('selected');
+      }
+      
+      // 更新全选状态
+      const allCbs = document.querySelectorAll('.file-cb');
+      const allChecked = Array.from(allCbs).every(c => c.checked);
+      const selectAllCb = document.getElementById('batch-select-all');
+      if (selectAllCb) selectAllCb.checked = allChecked && allCbs.length > 0;
+    }
+
+    function toggleBatchFile(el) {
+      const cb = el.querySelector('.file-cb');
+      cb.checked = !cb.checked;
+      updateBatchSelection(cb);
+    }
+
+    function toggleAllBatchFiles(selectAllCb) {
+      const isChecked = selectAllCb.checked;
+      const allCbs = document.querySelectorAll('.file-cb');
+      allCbs.forEach(cb => {
+        cb.checked = isChecked;
+        updateBatchSelection(cb);
+      });
+    }
+
+    async function refreshBatchFiles() {
+      const container = document.getElementById('batch-files-container');
+      if (!container) return;
+      container.innerHTML = '<div style="color:var(--muted); font-size:13px; padding:10px;">正在刷新文件列表...</div>';
+      try {
+        const resp = await fetch('/list_batch_files');
+        const data = await resp.json();
+        if (data.ok) {
+          if (data.files.length === 0) {
+            container.innerHTML = '<div style="color:var(--muted); font-size:13px; padding:10px;">batch_input 目录下暂无 Markdown 文件。</div>';
+            return;
+          }
+          let html = '<ul class="file-list">';
+          data.files.forEach(f => {
+            const parts = f.split(/[\\\\/]/);
+            const name = parts[parts.length - 1];
+            const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+            
+            html += `
+              <li class="file-item" onclick="toggleBatchFile(this)">
+                <input type="checkbox" name="selected_files" value="${f}" class="file-cb" onclick="event.stopPropagation(); updateBatchSelection(this)">
+                <div class="file-name" title="${f}">${name}</div>
+                ${dir ? `<span class="file-tag">${dir}</span>` : ''}
+              </li>
+            `;
+          });
+          html += '</ul>';
+          container.innerHTML = html;
+        } else {
+          container.innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px;">获取失败: ${data.message}</div>`;
+        }
+      } catch (e) {
+        container.innerHTML = `<div style="color:#dc2626; font-size:13px; padding:10px;">网络错误: ${e}</div>`;
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
       const input = document.getElementById('hotspot-keywords');
       if (input) {
@@ -474,6 +600,12 @@ PAGE_HTML = """<!doctype html>
             addKeywordsFromInput();
           }
         });
+      }
+      
+      // 如果当前是批量模式，初始化文件列表
+      const modeSelect = document.querySelector('select[name="mode"]');
+      if (modeSelect && modeSelect.value === 'batch') {
+        refreshBatchFiles();
       }
     });
   </script>
@@ -490,8 +622,10 @@ PAGE_HTML = """<!doctype html>
       <div class="modal-title">✨ 排版成功</div>
       <div class="modal-msg">{{ message }}</div>
       <div class="modal-footer">
+        {% if values.mode == 'single' %}
         <button class="modal-btn success" type="button" onclick="openPreview()">预览文章</button>
         <button class="modal-btn primary" type="button" onclick="downloadFile()">下载文件</button>
+        {% endif %}
         <button class="modal-btn secondary" type="button" onclick="closeModal()">关闭</button>
       </div>
     </div>
@@ -508,7 +642,7 @@ PAGE_HTML = """<!doctype html>
       </div>
       <div class="hero-actions">
         <div class="kw-wrap">
-          <select id="hotspot-source" class="btn-sm" style="flex: 0 0 110px; padding: 4px 8px; border-radius: 6px;">
+          <select id="hotspot-source" class="btn-sm" style="flex: 0 0 110px; padding: 10px 8px; border-radius: 6px;">
             <option value="">自动切换</option>
             <option value="baidu">百度热搜</option>
             <option value="weibo">微博热搜</option>
@@ -535,11 +669,26 @@ PAGE_HTML = """<!doctype html>
 
       <div class="full">
         <label>运行模式</label>
-        <select name="mode" onchange="this.form.submit()">
+        <select name="mode" onchange="window.location.href='/?mode=' + this.value">
           <option value="single" {% if values.mode == 'single' %}selected{% endif %}>单文件 (上传 MD)</option>
           <option value="batch" {% if values.mode == 'batch' %}selected{% endif %}>批处理目录 (服务器本地)</option>
         </select>
       </div>
+
+      {% if values.mode == 'batch' %}
+      <div class="full" id="batch-file-selector" style="margin-bottom: 20px; padding: 18px; border: 1px solid #e2e8f0; border-radius: 14px; background: #f8fafc; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
+        <div style="font-weight: bold; margin-bottom: 12px; color: var(--brand-2); display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <input type="checkbox" id="batch-select-all" onclick="toggleAllBatchFiles(this)" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--brand-2);">
+            <label for="batch-select-all" style="cursor: pointer; font-size: 14px; margin: 0;">选取待处理文件 (batch_input)</label>
+          </div>
+          <button type="button" onclick="refreshBatchFiles()" class="btn-sm" style="background: white; border: 1px solid #cbd5e1; color: #64748b;">刷新</button>
+        </div>
+        <div id="batch-files-container" style="max-height: 260px; overflow-y: auto; padding-right: 4px;">
+          正在加载文件列表...
+        </div>
+      </div>
+      {% endif %}
 
       <div class="full">
         <label>模板样式选择</label>
@@ -558,13 +707,10 @@ PAGE_HTML = """<!doctype html>
       </div>
       {% endif %}
 
+      {% if values.mode == 'single' %}
       <div>
         <label>标题</label>
-        {% if values.mode == 'single' %}
-          <input name="title" value="{{ values.title }}" placeholder="留空自动提取" />
-        {% else %}
-          <input name="title_template" value="{{ values.title_template }}" placeholder="留空自动使用文件名" />
-        {% endif %}
+        <input name="title" value="{{ values.title }}" placeholder="留空自动提取" />
       </div>
       <div>
         <label>作者（可选）</label>
@@ -580,6 +726,7 @@ PAGE_HTML = """<!doctype html>
         <label>封面图 URL（可选）</label>
         <input name="cover_image_url" value="{{ values.cover_image_url }}" placeholder="留空自动提取首图" />
       </div>
+      {% endif %}
 
       <div class="full" style="border-top: 1px dashed var(--line); margin: 10px 0; padding-top: 10px;">
         <div class="inline">
@@ -699,6 +846,12 @@ HOTSPOT_REPORT_HTML = """<!doctype html>
     .suggestion-item.selected {
       border-color: var(--brand);
       background: #f0fdfa;
+    }
+    .err {
+      color: #9f1239;
+      background: #fff1f2;
+      border-top: 1px solid #fecdd3;
+      padding: 18px;
     }
     .suggestion-cb {
       width: 18px;
@@ -845,7 +998,15 @@ HOTSPOT_REPORT_HTML = """<!doctype html>
         
         const data = await response.json();
         if (data.ok) {
-          status.innerHTML = '✅ 生成成功！文章已存放到：<br/><code style="background: #f1f5f9; padding: 2px 5px; border-radius: 4px;">' + data.path + '</code>';
+          status.innerHTML = `
+            <div style="background: #ecfdf5; border: 1px solid #10b981; padding: 15px; border-radius: 10px; color: #065f46;">
+              <div style="font-weight: bold; margin-bottom: 8px;">✅ 生成成功！文章已存放到：</div>
+              <code style="background: #fff; padding: 2px 5px; border-radius: 4px; display: block; margin-bottom: 12px; word-break: break-all;">${data.path}</code>
+              <div style="font-size: 13px;">
+                💡 <strong>提示：</strong> 您现在可以 <a href="/" style="color: #059669; font-weight: bold; text-decoration: underline;">回到首页</a>，选择 <strong>“批量操作”</strong> 模式，直接勾选刚才生成的文章进行一键排版。
+              </div>
+            </div>
+          `;
           status.style.color = '#059669';
         } else {
           status.textContent = '❌ 生成失败: ' + data.message;
@@ -1095,7 +1256,7 @@ def _run_batch(values: dict[str, Any], config: dict[str, str]) -> tuple[str, str
         outputs.append(str(out_path))
         preview_html = html
 
-    return f"批量排版成功！共处理 {len(outputs)} 个文件", preview_html
+    return f"批量排版成功！共处理 {len(outputs)} 个文件", ""
 
 
 def _fetch_today_hot_topics(limit: int = 15, source_id: str | None = None) -> tuple[list[dict[str, str]], str]:
@@ -1573,6 +1734,55 @@ def _analyze_hot_topics(
     return "".join(html_lines)
 
 
+def _run_batch_selected(values: dict[str, Any], config: dict[str, Any], selected_files: list[str]) -> tuple[str, str]:
+    from .batch import process_file
+    
+    in_dir = Path("batch_input")
+    out_dir = Path(str(values.get("out_dir") or config.get("out_dir") or "batch_output"))
+    
+    count = 0
+    preview_html = ""
+    
+    api_key, model, base_url = _get_kimi_fields(values, config)
+    
+    for rel_path in selected_files:
+        in_path = in_dir / rel_path
+        if not in_path.exists():
+            continue
+            
+        # 保持相对目录结构
+        article_out_dir = out_dir / in_path.parent.relative_to(in_dir)
+        
+        # 构造选项
+        from .formatter import FormatOptions
+        options = FormatOptions(
+            theme=str(values.get("theme", "default")),
+            author=str(values.get("author", "")),
+            summary=str(values.get("summary", "")),
+            cover_image_url=str(values.get("cover_image_url", "")),
+        )
+        
+        # 使用 batch.py 中的 process_file 逻辑
+        out_path = process_file(
+            md_path=in_path,
+            out_dir=article_out_dir,
+            options=options,
+            polish=values.get("polish", False),
+            kimi_api_key=api_key,
+            kimi_model=model,
+            kimi_base_url=base_url
+        )
+        
+        # 记录预览（取最后一个文件的内容）
+        if not preview_html:
+            preview_html = in_path.read_text(encoding="utf-8") # 暂时用源码
+            
+        count += 1
+
+    message = f"成功处理 {count} 个选中的文件，保存至 {out_dir}"
+    return message, ""
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
 
@@ -1585,13 +1795,36 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index() -> str:
+        # 允许通过 URL 参数 ?mode=batch 手动切换模式而不触发提交
+        mode = request.args.get("mode", "single")
+        values = _initial_values()
+        values["mode"] = mode
+        
         return render_template_string(
             PAGE_HTML,
-            values=_initial_values(),
+            values=values,
             message="",
             ok=True,
             preview_html="",
         )
+
+    @app.get("/list_batch_files")
+    def list_batch_files() -> Any:
+        try:
+            in_dir = Path("batch_input")
+            if not in_dir.exists():
+                return jsonify({"ok": True, "files": []})
+            
+            # 递归查找所有 .md 文件，返回相对路径
+            files = []
+            for path in in_dir.rglob("*.md"):
+                files.append(str(path.relative_to(in_dir)))
+            
+            # 按名称排序，通常日期目录在前的会排在前面
+            files.sort(reverse=True)
+            return jsonify({"ok": True, "files": files})
+        except Exception as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 500
 
     @app.post("/run")
     def run_pipeline() -> str:
@@ -1618,7 +1851,14 @@ def create_app() -> Flask:
         try:
             config = _load_config(str(values.get("config_path", "")))
             if values.get("mode") == "batch":
-                message, preview_html = _run_batch(values, config)
+                # 如果有选中的文件，则只处理选中的文件
+                selected_files = request.form.getlist("selected_files")
+                if selected_files:
+                    # 动态更新 config 中的 in_dir 为包含这些文件的逻辑是不现实的
+                    # 我们直接修改 _run_batch 内部逻辑，或者在这里处理
+                    message, preview_html = _run_batch_selected(values, config, selected_files)
+                else:
+                    message, preview_html = _run_batch(values, config)
             else:
                 message, preview_html = _run_single(values, config, markdown_text=markdown_text)
             ok = True

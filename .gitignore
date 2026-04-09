@@ -27,4 +27,5 @@ dist/
 # Output files
 output.html
 batch_output/
+batch_input/
 *.log

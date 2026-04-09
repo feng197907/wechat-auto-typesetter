@@ -16,6 +16,7 @@ from .kimi import (
     DEFAULT_KIMI_BASE_URL,
     DEFAULT_KIMI_MODEL,
     polish_markdown_with_kimi,
+    chat_with_kimi,
 )
 
 
@@ -27,7 +28,7 @@ PAGE_HTML = """<!doctype html>
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>微信文章排版控制台</title>
+  <title>微信文章排版控制台 v2.3</title>
   <style>
     :root {
       --bg: radial-gradient(circle at 20% 10%, #fff4dc 0%, #f8f3e8 35%, #e9f1ee 100%);
@@ -386,12 +387,14 @@ PAGE_HTML = """<!doctype html>
       }, 100);
     }
 
-    function showLoading() {
-      const isPolish = document.querySelector('input[name="polish"]').checked;
+    function showLoading(type = 'run', detail = '') {
+      const isPolish = document.querySelector('input[name="polish"]')?.checked;
       const overlay = document.getElementById('loading-overlay');
       const text = document.getElementById('loading-text');
       
-      if (isPolish) {
+      if (type === 'hotspot') {
+        text.innerText = "🔍 正在抓取 [" + (detail || '多源') + "] 并分析今日热点，请稍候...";
+      } else if (isPolish) {
         text.innerText = "🚀 AI 正在润色并排版中，请稍候...";
       } else {
         text.innerText = "⚡ 正在排版中...";
@@ -402,10 +405,27 @@ PAGE_HTML = """<!doctype html>
     }
 
     function openHotspotsReport() {
-      const qs = (window.hotspotKeywords && window.hotspotKeywords.length)
-        ? ('?keywords=' + encodeURIComponent(window.hotspotKeywords.join(',')))
+      const sourceSelect = document.getElementById('hotspot-source');
+      const source = sourceSelect.value;
+      const sourceText = sourceSelect.options[sourceSelect.selectedIndex].text;
+      const kwParams = (window.hotspotKeywords && window.hotspotKeywords.length)
+        ? ('&keywords=' + encodeURIComponent(window.hotspotKeywords.join(',')))
         : '';
-      window.open('/hotspots/report' + qs, '_blank');
+      
+      // 安全起见，不再通过 URL 传递 API Key
+      // 密钥将由后端直接从 session 或配置中读取
+      
+      // 显示加载提示
+      showLoading('hotspot', sourceText);
+      
+      // 跳转到报告页
+      const reportUrl = '/hotspots/report?source=' + source + kwParams;
+      window.open(reportUrl, '_blank');
+      
+      // 3秒后自动隐藏当前页面的加载层
+      setTimeout(() => {
+        document.getElementById('loading-overlay').style.display = 'none';
+      }, 3000);
     }
 
     // 提交任务后，自动将 URL 重置为根路径，防止手动刷新时弹出“确认表单重新提交”或停留在 /run
@@ -488,7 +508,17 @@ PAGE_HTML = """<!doctype html>
       </div>
       <div class="hero-actions">
         <div class="kw-wrap">
-          <input id="hotspot-keywords" class="kw-input" placeholder="输入关键词，回车/逗号添加，可添加多个" />
+          <select id="hotspot-source" class="btn-sm" style="flex: 0 0 110px; padding: 4px 8px; border-radius: 6px;">
+            <option value="">自动切换</option>
+            <option value="baidu">百度热搜</option>
+            <option value="weibo">微博热搜</option>
+            <option value="zhihu">知乎热榜</option>
+            <option value="wechat">微信公众号</option>
+            <option value="xhs">小红书热搜</option>
+            <option value="toutiao">今日头条</option>
+            <option value="douyin">抖音热搜</option>
+          </select>
+          <input id="hotspot-keywords" class="kw-input" placeholder="输入关键词，回车/逗号添加" />
           <button class="btn-sm" type="button" onclick="addKeywordsFromInput()">添加</button>
         </div>
         <div id="hotspot-keywords-list" class="kw-list"></div>
@@ -617,6 +647,8 @@ HOTSPOT_REPORT_HTML = """<!doctype html>
       background: var(--panel);
       box-shadow: 0 10px 26px rgba(17, 24, 39, 0.08);
       overflow: hidden;
+      min-height: 400px;
+      position: relative;
     }
     .head {
       padding: 16px 18px;
@@ -633,18 +665,54 @@ HOTSPOT_REPORT_HTML = """<!doctype html>
       font-size: 13px;
       color: var(--muted);
     }
-    pre {
+    .report-content {
       margin: 0;
       padding: 18px;
-      white-space: pre-wrap;
-      word-break: break-word;
       line-height: 1.75;
       font-size: 15px;
+    }
+    .report-content a:hover {
+      text-decoration: underline !important;
     }
     .err {
       color: #9f1239;
       background: #fff1f2;
       border-top: 1px solid #fecdd3;
+      padding: 18px;
+    }
+    /* Loading Styles */
+    .loading-box {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      width: 100%;
+      padding: 40px;
+    }
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 5px solid #e2e8f0;
+      border-top: 5px solid var(--brand);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 20px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .loading-msg {
+      font-size: 18px;
+      font-weight: bold;
+      color: var(--brand);
+      letter-spacing: 1px;
+    }
+    .loading-sub {
+      font-size: 14px;
+      color: var(--muted);
+      margin-top: 10px;
     }
   </style>
 </head>
@@ -653,15 +721,59 @@ HOTSPOT_REPORT_HTML = """<!doctype html>
     <section class="panel">
       <header class="head">
         <h1 class="title">当日热点分析报告</h1>
-        <p class="meta">生成时间: {{ generated_at }}</p>
+        <p class="meta" id="meta-time">生成中...</p>
       </header>
-      {% if ok %}
-      <pre>{{ report }}</pre>
-      {% else %}
-      <pre class="err">{{ report }}</pre>
-      {% endif %}
+      
+      <div id="loading-state" class="loading-box">
+        <div class="spinner"></div>
+        <div class="loading-msg">正在抓取并分析实时热点...</div>
+        <div class="loading-sub">AI 正在深度思考选题建议，请耐心等待约 10-20 秒</div>
+      </div>
+
+      <div id="report-body" class="report-content" style="display: none;"></div>
+      <pre id="error-body" class="err" style="display: none;"></pre>
     </section>
   </div>
+
+  <script>
+    async function fetchReport() {
+      const params = new URLSearchParams(window.location.search);
+      const source = params.get('source') || '';
+      const keywords = params.get('keywords') || '';
+      
+      try {
+        const response = await fetch('/hotspots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source, keywords })
+        });
+        
+        const data = await response.json();
+        
+        document.getElementById('loading-state').style.display = 'none';
+        
+        if (data.ok) {
+          document.getElementById('meta-time').textContent = '生成时间: ' + data.generated_at;
+          const body = document.getElementById('report-body');
+          body.innerHTML = data.report;
+          body.style.display = 'block';
+        } else {
+          const err = document.getElementById('error-body');
+          err.textContent = data.message || '抓取热点失败，请检查网络或 API 配置。';
+          err.style.display = 'block';
+          document.getElementById('meta-time').textContent = '生成失败';
+        }
+      } catch (e) {
+        document.getElementById('loading-state').style.display = 'none';
+        const err = document.getElementById('error-body');
+        err.textContent = '请求异常: ' + e;
+        err.style.display = 'block';
+        document.getElementById('meta-time').textContent = '生成异常';
+      }
+    }
+
+    window.onload = fetchReport;
+  </script>
 </body>
 </html>
 """
@@ -699,6 +811,16 @@ def _load_config(config_path: str) -> dict[str, str]:
 
 
 def _initial_values() -> dict[str, Any]:
+    # 尝试从配置文件或环境变量加载初始 API Key
+    try:
+        config = _load_config("examples/pipeline.config.json")
+        api_key = (
+            os.getenv("KIMI_API_KEY", "")
+            or config.get("kimi_api_key", "")
+        )
+    except:
+        api_key = ""
+
     return {
         "mode": "single",
         "theme": "default",
@@ -714,7 +836,7 @@ def _initial_values() -> dict[str, Any]:
         "summary": "",
         "cover_image_url": "",
         "polish": False,
-        "kimi_api_key": "",
+        "kimi_api_key": api_key,
         "kimi_model": DEFAULT_KIMI_MODEL,
         "kimi_base_url": DEFAULT_KIMI_BASE_URL,
     }
@@ -849,9 +971,9 @@ def _run_batch(values: dict[str, Any], config: dict[str, str]) -> tuple[str, str
     return f"批量排版成功！共处理 {len(outputs)} 个文件", preview_html
 
 
-def _fetch_today_hot_topics(limit: int = 15) -> tuple[list[str], str]:
-    # 尝试百度热搜 (通常比较稳定且易于抓取)
-    try:
+def _fetch_today_hot_topics(limit: int = 15, source_id: str | None = None) -> tuple[list[dict[str, str]], str]:
+    # 定义可用的源
+    def _get_baidu():
         url = "https://top.baidu.com/board?tab=realtime"
         req = urllib_request.Request(
             url,
@@ -859,26 +981,72 @@ def _fetch_today_hot_topics(limit: int = 15) -> tuple[list[str], str]:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
             },
         )
-        with urllib_request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8")
-        
-        # 百度热搜词通常嵌在 JSON 数据中
-        words = re.findall(r'"word":"([^"]+)"', html)
-        if words:
+        try:
+            with urllib_request.urlopen(req, timeout=10) as resp:
+                html = resp.read().decode("utf-8")
+            
+            # 百度热搜的 JSON 数据通常在 <!-- s-data: {...} --> 中
+            match = re.search(r'<!--\s*s-data:(.*?)\s*-->', html, re.DOTALL)
+            if match:
+                try:
+                    data = json.loads(match.group(1))
+                    cards = data.get("data", {}).get("cards", [])
+                    topics = []
+                    for card in cards:
+                        content = card.get("content", [])
+                        for item in content:
+                            word = item.get("word")
+                            if word:
+                                topics.append({
+                                    "title": word,
+                                    "url": f"https://www.baidu.com/s?wd={urllib_request.quote(word)}"
+                                })
+                    if topics: return topics[:limit], "百度热搜"
+                except: pass
+
+            # 备选正则提取
+            words = re.findall(r'"word":"([^"]+)"', html)
+            if not words: return None
             seen = set()
-            unique_words = []
+            topics: list[dict[str, str]] = []
             for w in words:
                 w = w.strip()
                 if w and w not in seen:
-                    unique_words.append(w)
+                    topics.append({
+                        "title": w,
+                        "url": f"https://www.baidu.com/s?wd={urllib_request.quote(w)}"
+                    })
                     seen.add(w)
-            if unique_words:
-                return unique_words[:limit], "百度热搜"
-    except Exception:
-        pass
+            return topics[:limit], "百度热搜"
+        except Exception:
+            return None
 
-    # 尝试微博热搜
-    try:
+    def _get_douyin():
+        # 抖音热搜，使用开放 API 的备用路径
+        url = "https://www.iesdouyin.com/web/api/v2/hotsearch/billboard/word/"
+        req = urllib_request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            },
+        )
+        try:
+            with urllib_request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            words = data.get("word_list", [])
+            topics = []
+            for item in words:
+                word = item.get("word")
+                if word:
+                    topics.append({
+                        "title": word,
+                        "url": f"https://www.douyin.com/search/{urllib_request.quote(word)}"
+                    })
+            return (topics[:limit], "抖音热搜") if topics else None
+        except Exception:
+            return None
+
+    def _get_weibo():
         url = "https://weibo.com/ajax/side/hotSearch"
         req = urllib_request.Request(
             url,
@@ -891,56 +1059,211 @@ def _fetch_today_hot_topics(limit: int = 15) -> tuple[list[str], str]:
             raw = resp.read().decode("utf-8")
         data = json.loads(raw)
         real_hot = data.get("data", {}).get("realtime", [])
-        words = [item.get("word") for item in real_hot if item.get("word")]
-        if words:
-            return words[:limit], "微博热搜"
-    except Exception:
-        pass
+        topics: list[dict[str, str]] = []
+        for item in real_hot:
+            word = item.get("word")
+            scheme = item.get("scheme") # 微博链接
+            if word:
+                link = scheme if scheme and scheme.startswith("http") else f"https://s.weibo.com/weibo?q={urllib_request.quote(word)}"
+                topics.append({"title": word, "url": link})
+        return (topics[:limit], "微博热搜") if topics else None
 
-    # 最后尝试知乎热榜 (原逻辑，目前可能因 401 失败)
-    try:
+    def _get_zhihu():
         url = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=50&desktop=true"
         req = urllib_request.Request(
             url,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
                 "Referer": "https://www.zhihu.com/hot",
+                "Accept": "application/json, text/plain, */*",
+                "X-Requested-With": "XMLHttpRequest",
             },
         )
-        with urllib_request.urlopen(req, timeout=10) as resp:
-            raw = resp.read().decode("utf-8")
-        data = json.loads(raw)
+        try:
+            with urllib_request.urlopen(req, timeout=10) as resp:
+                raw = resp.read().decode("utf-8")
+            data = json.loads(raw)
+            topics: list[dict[str, str]] = []
+            for item in data.get("data", []):
+                target = item.get("target", {}) if isinstance(item, dict) else {}
+                title = str(target.get("title", "")).strip()
+                target_id = target.get("id")
+                if title:
+                    link = f"https://www.zhihu.com/question/{target_id}" if target_id else "https://www.zhihu.com/hot"
+                    topics.append({"title": title, "url": link})
+            return (topics[:limit], "知乎热榜") if topics else None
+        except Exception:
+            # 如果 API 失败，退而求其次抓取网页
+            try:
+                web_url = "https://www.zhihu.com/hot"
+                web_req = urllib_request.Request(web_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"})
+                with urllib_request.urlopen(web_req, timeout=10) as resp:
+                    html = resp.read().decode("utf-8")
+                # 粗略提取
+                items = re.findall(r'\"title\":\"([^\"]+)\"', html)
+                topics = []
+                for item in items:
+                    if len(item) > 5:
+                        topics.append({"title": item, "url": "https://www.zhihu.com/hot"})
+                return (topics[:limit], "知乎热榜(网页版)") if topics else None
+            except:
+                return None
 
-        topics: list[str] = []
-        for item in data.get("data", []):
-            target = item.get("target", {}) if isinstance(item, dict) else {}
-            title = str(target.get("title", "")).strip()
-            if title:
-                topics.append(title)
+    def _get_toutiao():
+        # 使用头条 PC 版热榜接口，这是目前最稳定的爬虫路径
+        url = "https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc"
+        try:
+            req = urllib_request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.toutiao.com/",
+                "Accept": "application/json, text/plain, */*"
+            })
+            with urllib_request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            topics = []
+            for item in data.get("data", []):
+                title = item.get("Title")
+                link = item.get("Url")
+                if title:
+                    topics.append({
+                        "title": title,
+                        "url": link if link else f"https://www.toutiao.com/search/?keyword={urllib_request.quote(title)}"
+                    })
+            return (topics[:limit], "今日头条") if topics else None
+        except Exception:
+            return None
 
-        if topics:
-            return topics[:limit], "知乎热榜"
-    except Exception:
-        pass
+    def _get_wechat():
+        # 搜狗微信反爬严重，改用百度热搜的微信子榜单（聚合源）
+        url = "https://top.baidu.com/board?tab=wechat"
+        try:
+            req = urllib_request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            })
+            with urllib_request.urlopen(req, timeout=10) as resp:
+                html = resp.read().decode("utf-8")
+            
+            # 尝试 JSON 数据提取
+            match = re.search(r'<!--\s*s-data:(.*?)\s*-->', html, re.DOTALL)
+            if match:
+                try:
+                    data = json.loads(match.group(1))
+                    cards = data.get("data", {}).get("cards", [])
+                    topics = []
+                    for card in cards:
+                        content = card.get("content", [])
+                        for item in content:
+                            word = item.get("word")
+                            if word:
+                                topics.append({
+                                    "title": word,
+                                    "url": f"https://weixin.sogou.com/weixin?type=2&query={urllib_request.quote(word)}"
+                                })
+                    if topics: return topics[:limit], "微信热点"
+                except: pass
+
+            # 备选正则提取
+            words = re.findall(r'"word":"([^"]+)"', html)
+            topics = []
+            for w in words:
+                w = w.strip()
+                if w:
+                    topics.append({
+                        "title": w,
+                        "url": f"https://weixin.sogou.com/weixin?type=2&query={urllib_request.quote(w)}"
+                    })
+            return (topics[:limit], "微信热点") if topics else None
+        except Exception:
+            return None
+
+    def _get_xhs():
+        # 小红书暂无稳定公开接口，尝试通过百度搜索聚合热点作为替代
+        url = "https://www.baidu.com/s?wd=%E5%B0%8F%E7%BA%A2%E4%B9%A6%E7%83%AD%E6%90%9C%E6%A6%9C"
+        try:
+            req = urllib_request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            })
+            with urllib_request.urlopen(req, timeout=10) as resp:
+                html = resp.read().decode("utf-8")
+            # 从搜索结果中粗略提取可能的标题（这是一项尝试性的爬虫逻辑）
+            # 实际生产中建议使用专门的爬虫集群或付费 API
+            items = re.findall(r'\"title\":\"([^\"]+)\"', html)
+            topics = []
+            seen = set()
+            for item in items:
+                # 过滤掉一些明显的噪音
+                if "小红书" in item and len(item) > 5 and item not in seen:
+                    topics.append({
+                        "title": item,
+                        "url": f"https://www.xiaohongshu.com/search_result?keyword={urllib_request.quote(item)}"
+                    })
+                    seen.add(item)
+            
+            # 如果百度搜索没抓到，尝试一个备用聚合页
+            if not topics:
+                # 最后的倔强：返回百度实时热搜的前几名作为填充，避免完全失败
+                res_baidu = _get_baidu()
+                if res_baidu:
+                    return res_baidu[0], "热门话题(备选)"
+            
+            return (topics[:limit], "小红书趋势") if topics else None
+        except Exception:
+            return None
+
+    # 如果指定了源，则只尝试该源
+    sources = {
+        "baidu": _get_baidu,
+        "weibo": _get_weibo,
+        "zhihu": _get_zhihu,
+        "wechat": _get_wechat,
+        "xhs": _get_xhs,
+        "toutiao": _get_toutiao,
+        "douyin": _get_douyin,
+    }
+
+    if source_id and source_id in sources:
+        try:
+            res = sources[source_id]()
+            if res: return res
+            raise RuntimeError(f"源 '{source_id}' 目前无法获取数据，请尝试其他源或自动切换。")
+        except Exception as e:
+            if isinstance(e, RuntimeError): raise e
+            raise RuntimeError(f"指定源抓取失败 ({source_id}): {e}")
+
+    # 默认流程：自动重试 (当 source_id 为空或为 'auto' 时)
+    for sid in ["baidu", "weibo", "douyin", "zhihu", "wechat", "toutiao"]:
+        try:
+            res = sources[sid]()
+            if res: return res
+        except Exception:
+            continue
 
     raise RuntimeError("未抓取到热点数据，所有备选源均不可用，请稍后重试。")
 
 
-def _filter_topics_by_keywords(topics: list[str], keywords: list[str]) -> list[str]:
+def _filter_topics_by_keywords(topics: list[dict[str, str]], keywords: list[str]) -> list[dict[str, str]]:
     if not keywords:
         return topics
     lowered = [k.lower() for k in keywords if k]
-    result: list[str] = []
+    result: list[dict[str, str]] = []
     for t in topics:
-        lt = t.lower()
+        lt = t["title"].lower()
         if any(k in lt for k in lowered):
             result.append(t)
     return result
 
 
-def _analyze_hot_topics(topics: list[str], source: str = "热点源", selected_keywords: list[str] | None = None) -> str:
+def _analyze_hot_topics(
+    topics: list[dict[str, str]], 
+    source: str = "热点源", 
+    selected_keywords: list[str] | None = None,
+    api_key: str = "",
+    model: str = DEFAULT_KIMI_MODEL,
+    base_url: str = DEFAULT_KIMI_BASE_URL
+) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    text = " ".join(topics)
+    titles = [t["title"] for t in topics]
+    text = " ".join(titles)
     tokens = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", text)
     stop_words = {
         "一个", "我们", "他们", "这个", "那个", "什么", "如何", "为什么", "可以", "已经", "还是", "真的", "到底", "中国", "美国", "今天", "当日", "热点",
@@ -964,9 +1287,9 @@ def _analyze_hot_topics(topics: list[str], source: str = "热点源", selected_k
         "文娱/体育": ["电影", "演员", "综艺", "音乐", "比赛", "球队", "冠军", "奥运", "演唱会"],
     }
     category_count: dict[str, int] = {k: 0 for k in category_rules}
-    for topic in topics:
+    for title in titles:
         for category, keys in category_rules.items():
-            if any(key in topic for key in keys):
+            if any(key in title for key in keys):
                 category_count[category] += 1
 
     ranked_categories = [
@@ -979,32 +1302,77 @@ def _analyze_hot_topics(topics: list[str], source: str = "热点源", selected_k
     kw_line = ""
     if selected_keywords:
         kw_line = "、".join(selected_keywords)
-    lines = [
-        f"热点报告时间: {now}",
-        f"数据源: {source}",
-        f"关键词筛选: {kw_line}" if kw_line else "",
-        "",
-        "一、今日热点 Top 10",
-    ]
-    for idx, topic in enumerate(topics[:10], 1):
-        lines.append(f"{idx}. {topic}")
+    
+    # 构造 AI 建议内容
+    ai_suggestions = ""
+    if api_key.strip():
+        try:
+            prompt = f"以下是今日的热点话题列表：\n" + "\n".join([f"- {t}" for t in titles[:20]])
+            if selected_keywords:
+                prompt += f"\n用户关注的关键词有：{', '.join(selected_keywords)}"
+            
+            system_prompt = (
+                "你是一个资深的微信公众号运营专家。请根据提供的热点话题，为用户提供 3-4 条极具实操性的公众号选题和内容创作建议。"
+                "要求：\n"
+                "1) 结合公众号读者的阅读习惯（猎奇、实用、共鸣、情绪价值）；\n"
+                "2) 给出具体的切入角度，而不仅仅是罗列话题；\n"
+                "3) 建议要具体、可落地；\n"
+                "4) 格式为 HTML 的 <ul><li> 列表形式，不要输出多余的解释文字。"
+            )
+            
+            ai_suggestions = chat_with_kimi(
+                prompt,
+                system_prompt,
+                api_key=api_key,
+                model=model,
+                base_url=base_url,
+                temperature=0.7
+            )
+            # 确保返回的是干净的列表
+            if "<ul>" not in ai_suggestions:
+                lines = [line.strip("- *1234. ") for line in ai_suggestions.split("\n") if line.strip()]
+                ai_suggestions = "<ul>" + "".join([f"<li>{l}</li>" for l in lines]) + "</ul>"
+        except Exception as e:
+            ai_suggestions = f"<div style='color: #9f1239; background: #fff1f2; padding: 10px; border-radius: 8px; border: 1px solid #fda4af; font-size: 13px; margin-bottom: 10px;'><strong>AI 分析请求失败:</strong> {e}<br/><small>请检查 API Key 是否正确，或 API 余额是否充足。</small></div>"
+    else:
+        ai_suggestions = "<div style='color: #6b7280; background: #f9fafb; padding: 10px; border-radius: 8px; border: 1px solid #e5e7eb; font-size: 13px; margin-bottom: 10px;'><strong>提示:</strong> 未检测到 Kimi API Key，正在展示默认建议。输入 API Key 后可获得 AI 深度分析。</div>"
+    
+    if not ai_suggestions or "提示:" in ai_suggestions:
+        ai_suggestions += (
+            "<ul>"
+            "<li>1. 选 Top 3 热点中的一个争议点，做“观点+证据”短评。</li>"
+            "<li>2. 结合你账号定位，把热点改写成“对读者有什么影响”的实用解读。</li>"
+            "<li>3. 复盘关键词趋势，连续 3 天跟踪同一主题，做系列内容。</li>"
+            "</ul>"
+        )
 
-    lines.extend(
-        [
-            "",
-            "二、关键词聚焦",
-            keyword_line,
-            "",
-            "三、话题结构",
-            category_line,
-            "",
-            "四、内容建议",
-            "1. 选 Top 3 热点中的一个争议点，做“观点+证据”短评。",
-            "2. 结合你账号定位，把热点改写成“对读者有什么影响”的实用解读。",
-            "3. 复盘关键词趋势，连续 3 天跟踪同一主题，做系列内容。",
-        ]
-    )
-    return "\n".join(lines)
+    # 构造 HTML 报告
+    html_lines = [
+        f"<div><strong>热点报告时间:</strong> {now}</div>",
+        f"<div><strong>数据源:</strong> {source}</div>",
+    ]
+    if kw_line:
+        html_lines.append(f"<div><strong>关键词筛选:</strong> {kw_line}</div>")
+    
+    html_lines.append("<br/>")
+    html_lines.append("<h3>一、今日热点 Top 10</h3>")
+    html_lines.append("<ol style='padding-left: 20px;'>")
+    for t in topics[:10]:
+        html_lines.append(f"<li><a href='{t['url']}' target='_blank' style='color: #0f766e; text-decoration: none;'>{t['title']}</a></li>")
+    html_lines.append("</ol>")
+
+    html_lines.extend([
+        "<br/>",
+        "<h3>二、关键词聚焦</h3>",
+        f"<div>{keyword_line}</div>",
+        "<br/>",
+        "<h3>三、话题结构</h3>",
+        f"<div>{category_line}</div>",
+        "<br/>",
+        "<h3>四、内容建议 (AI 分析)</h3>" if api_key.strip() else "<h3>四、内容建议</h3>",
+        ai_suggestions
+    ])
+    return "".join(html_lines)
 
 
 def create_app() -> Flask:
@@ -1089,8 +1457,41 @@ def create_app() -> Flask:
     @app.post("/hotspots")
     def hotspots() -> Any:
         try:
-            topics, source = _fetch_today_hot_topics(limit=15)
-            report = _analyze_hot_topics(topics, source=source)
+            source_id = request.form.get("source") or request.args.get("source") or ""
+            kw_str = ""
+            # 优先从请求中获取 API Key
+            api_key_req = request.form.get("kimi_api_key") or request.args.get("kimi_api_key")
+            
+            if request.is_json:
+                body = request.get_json(silent=True) or {}
+                kw_str = str(body.get("keywords", "") or "")
+                source_id = source_id or body.get("source", "")
+                api_key_req = api_key_req or body.get("kimi_api_key")
+            else:
+                kw_str = request.form.get("keywords", "") or request.args.get("keywords", "") or ""
+            
+            keywords = [k.strip() for k in re.split(r"[\s,，、;；]+", kw_str) if k.strip()]
+            
+            # 获取 Kimi API 配置
+            config = _load_config(str(_initial_values().get("config_path", "")))
+            api_key, model, base_url = _get_kimi_fields(_initial_values(), config)
+            
+            # 覆盖为用户实时输入的 Key
+            if api_key_req:
+                api_key = api_key_req
+
+            topics, source = _fetch_today_hot_topics(limit=15, source_id=source_id)
+            if keywords:
+                topics = _filter_topics_by_keywords(topics, keywords)
+            
+            report = _analyze_hot_topics(
+                topics, 
+                source=source, 
+                selected_keywords=keywords if keywords else None,
+                api_key=api_key,
+                model=model,
+                base_url=base_url
+            )
             return jsonify(
                 {
                     "ok": True,
@@ -1098,6 +1499,7 @@ def create_app() -> Flask:
                     "report": report,
                     "topics": topics,
                     "source": source,
+                    "keywords": keywords,
                 }
             )
         except Exception as exc:
@@ -1105,28 +1507,15 @@ def create_app() -> Flask:
 
     @app.get("/hotspots/report")
     def hotspots_report_page() -> str:
-        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            topics, source = _fetch_today_hot_topics(limit=15)
-            report = _analyze_hot_topics(topics, source=source)
-            ok = True
-        except Exception as exc:
-            report = f"抓取热点失败: {exc}"
-            ok = False
-
-        return render_template_string(
-            HOTSPOT_REPORT_HTML,
-            generated_at=generated_at,
-            report=report,
-            ok=ok,
-        )
+        return render_template_string(HOTSPOT_REPORT_HTML)
 
     return app
 
 
 def main() -> int:
     app = create_app()
-    app.run(host="127.0.0.1", port=8765, debug=False)
+    # 开启 debug=True 以便代码修改后自动重启
+    app.run(host="127.0.0.1", port=8765, debug=True)
     return 0
 
 

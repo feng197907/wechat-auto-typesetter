@@ -31,6 +31,55 @@ class KimiAPIError(RuntimeError):
     """Raised when Kimi API returns invalid or error response."""
 
 
+def chat_with_kimi(
+    prompt: str,
+    system_prompt: str,
+    *,
+    api_key: str,
+    model: str = DEFAULT_KIMI_MODEL,
+    base_url: str = DEFAULT_KIMI_BASE_URL,
+    temperature: float = 0.5,
+    timeout_seconds: int = 90,
+) -> str:
+    """Generic chat with Kimi model."""
+    if not api_key.strip():
+        raise ValueError("Kimi API Key 不能为空。")
+
+    url = base_url.rstrip("/") + "/chat/completions"
+    payload = {
+        "model": model,
+        "temperature": temperature,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    req = request.Request(
+        url=url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with request.urlopen(req, timeout=timeout_seconds) as resp:
+            raw = resp.read().decode("utf-8")
+        data: dict[str, Any] = json.loads(raw)
+        choices = data.get("choices") or []
+        first = choices[0] if choices else {}
+        message = first.get("message") or {}
+        content = message.get("content", "")
+        
+        if isinstance(content, str):
+            return content.strip()
+        return str(content)
+    except Exception as exc:
+        raise KimiAPIError(f"调用 Kimi API 失败: {exc}") from exc
+
+
 def polish_markdown_with_kimi(
     markdown_text: str,
     *,
